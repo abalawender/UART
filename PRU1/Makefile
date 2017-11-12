@@ -19,6 +19,7 @@ LFLAGS=--reread_libs --warn_sections --stack_size=$(STACK_SIZE) --heap_size=$(HE
 TARGET=$(GEN_DIR)/$(PROJ_NAME).out
 MAP=$(GEN_DIR)/$(PROJ_NAME).map
 SOURCES=$(wildcard *.c)
+SOURCES+=$(wildcard ../*.c)
 #Using .object instead of .obj in order to not conflict with the CCS build process
 OBJECTS=$(patsubst %,$(GEN_DIR)/%,$(SOURCES:.c=.object))
 

@@ -38,6 +38,7 @@
 #include <rsc_types.h>
 #include <pru_rpmsg.h>
 #include "PRU1_resource_table.h"
+#include "../common.h"
 
 volatile register uint32_t __R30;
 volatile register uint32_t __R31;
@@ -79,7 +80,9 @@ uint8_t reverse(uint8_t n) {
 	return (lookup[n&0xF] << 4) | lookup[n>>4];
 }
 
-#include "../common"
+char bitcount16[] = { 0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4 };
+
+
 
 void main(void)
 {
@@ -104,7 +107,7 @@ void main(void)
 
 	/* Create the RPMsg channel between the PRU and ARM user space using the transport structure. */
 	while (pru_rpmsg_channel(RPMSG_NS_CREATE, &transport, CHAN_NAME, CHAN_DESC, CHAN_PORT) != PRU_RPMSG_SUCCESS);
-	int cond = 0;
+	//int cond = 0;
 	// while (cond) {
 	// 	/* Check bit 30 of register R31 to see if the ARM has kicked us */
 	// 	if (__R31 & HOST_INT) {
@@ -139,13 +142,8 @@ void main(void)
 
 		int s = __R31;
 
-		char bitcount16[] = { 0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4 };
-
 		char b1 = (bitcount16[0xF & s>>12] + bitcount16[0xF & s>>8] ) < 4; // majority voting and inversion
 		char b2 = (bitcount16[0xF & s>>4 ] + bitcount16[0xF & s>>0] ) < 4;
-
-		// payload[bit_counter]   = '0' + b1;
-		// payload[1+bit_counter] = '0' + b2;
 
 		byte <<= 2;
 		byte |= b1<<1 | b2;
@@ -153,21 +151,17 @@ void main(void)
 		bit_counter += 2;
 		if ( bit_counter < 10 ) continue;
 
-		//payload[12] = reverse(byte >> 1); // reverse byte and truncate uart start/stop bits
-		
 		payload[ pos ] = reverse(byte >> 1); // reverse byte and truncate uart start/stop bits
 
 		len = bit_counter = byte = 0;
+		(void)len;
 
 		CT_CFG.GPCFG1_bit.PRU1_GPI_SB = 1; // clear start bit
 
-		//pru_rpmsg_send(&transport, dst, src, payload, 67);
-		//pru_rpmsg_send(&transport, dst, src, payload+12, 1);
-
-		if( payload[pos] == '\04' || ++pos == 64 ) {
+		if( payload[pos] == '\04' || ++pos == 64 ) /* send buffer when filled or EOF received */
+		{	
 			payload[pos]   = '\r';
 			payload[++pos] = '\n';
-			payload[++pos] = '\0';
 			pru_rpmsg_send(&transport, dst, src, payload, ++pos);
 			pos = 0;
 		}

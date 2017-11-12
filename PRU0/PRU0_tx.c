@@ -38,6 +38,7 @@
 #include <rsc_types.h>
 #include <pru_rpmsg.h>
 #include "PRU0_resource_table.h"
+#include "../common.h"
 
 volatile register uint32_t __R30;
 volatile register uint32_t __R31;
@@ -70,7 +71,6 @@ volatile register uint32_t __R31;
 
 uint8_t payload[RPMSG_BUF_SIZE];
 
-#include "../common"
 
 void main(void)
 {
