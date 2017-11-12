@@ -33,7 +33,7 @@
 
 #include <stdint.h>
 #include <pru_cfg.h>
-#include "resource_table_empty.h"
+#include "PRU0_resource_table.h"
 #include <types.h>
 
 volatile register uint32_t __R30;
@@ -118,7 +118,8 @@ void main(void)
 	CT_CFG.GPCFG0_bit.PRU0_GPO_DIV0 = 0x17; // 200 / 12.5 = 16
 	CT_CFG.GPCFG0_bit.PRU0_GPO_DIV1 = 0x1e; // 16 / 16 = 1
 
-	unsigned char msg[] = "lubie Martyne\r\n";
+	unsigned char msg[] = "xy";
+	//unsigned char msg[] = "lubie Martyne\r\n";
 	int i = 0;
 
 	__R30 |= 1<<29; 	/* set LOAD_GPO_SH0 */
@@ -144,6 +145,27 @@ void main(void)
 		__R30 &= ~(1<<29); 	/* reset LOAD_GPO_SH0 */
 
 		i+=3;
+
+
+		while( CT_CFG.GPCFG0_bit.PRU0_GPO_SH_SEL == 1 ) {}; // wait until it's zero
+
+		__R30 = 0;
+
+		while( CT_CFG.GPCFG0_bit.PRU0_GPO_SH_SEL == 0 ) {}; // wait until it's zero
+		
+		CT_CFG.GPCFG0_bit.PRU0_GPO_MODE = 0x0; // direct out
+
+
+		__delay_cycles(200000000);
+
+		CT_CFG.GPCFG0_bit.PRU0_GPO_MODE = 0x1; // shift out
+
+		__R30 |= 1<<29 | 1<<30 ; 	/* set LOAD_GPO_SH0/1 */
+		__R30 &= 0xFFFF0000;
+		__R30 &= ~(1<<29 | 1<<30); 	/* reset LOAD_GPO_SH0/1 */
+
+		__R30 |= 1<<31;
+
 	}
 
 	__R30 &= ~(1<<31);	/* reset ENABLE_SHIFT */
