@@ -116,7 +116,8 @@ void main(void)
 	CT_CFG.GPCFG0_bit.PRU0_GPO_MODE = 0x1; // shift out
 
 	CT_CFG.GPCFG0_bit.PRU0_GPO_DIV0 = 0x17; // 200 / 12.5 = 16
-	CT_CFG.GPCFG0_bit.PRU0_GPO_DIV1 = 0x1e; // 16 / 16 = 1
+	CT_CFG.GPCFG0_bit.PRU0_GPO_DIV1 = 0x0e; // 16 / 8 = 2
+	//CT_CFG.GPCFG0_bit.PRU0_GPO_DIV1 = 0x1e; // 16 / 16 = 1
 
 	unsigned char msg[] = "xy";
 	//unsigned char msg[] = "lubie Martyne\r\n";

@@ -128,58 +128,55 @@ void main(void)
 	// 	}
 	// }
 
-	CT_CFG.GPCFG1_bit.PRU1_GPI_MODE = 0x2; // 28-bit shift in
 
 	CT_CFG.GPCFG1_bit.PRU1_GPI_DIV0 = 0x17; // 200MHz / 12.5 -> 16MHz
 	//CT_CFG.GPCFG1_bit.PRU1_GPI_DIV1 = 0x1E; // -> 1MHz
-	CT_CFG.GPCFG1_bit.PRU1_GPI_DIV1 = 0x0E; // -> 2MHz
+	//CT_CFG.GPCFG1_bit.PRU1_GPI_DIV1 = 0x0E; // -> 2MHz
 	//CT_CFG.GPCFG1_bit.PRU1_GPI_DIV1 = 0x06; // -> 4MHz
+	//CT_CFG.GPCFG1_bit.PRU1_GPI_DIV1 = 0x02; // -> 8MHz 
+	CT_CFG.GPCFG1_bit.PRU1_GPI_DIV1 = 0x00; // -> 16MHz 
 
+	CT_CFG.GPCFG1_bit.PRU1_GPI_MODE = 0x2; // 28-bit shift in
 
 
 	src = 1024; // found out to be working ok
 	dst = 30;
+	int cnt = 0;
+	int byte = 0;
 	while(1) {
-
 			memcpy( payload, "                                                                 \n", 67 );
 
-			cond = 31;
+			byte = 0;
 
-			while( ~__R31 & 1<<28 ) { };  // wait for cnt16 (replaceable by system event)
+			for(cnt = 0; cnt < 10; cnt+=2) {
 
-			while( ~__R31 & 1<<19 ) { };  // wait for exactly 10 bits of data
+				while( ~__R31 & 1<<28 ) { };  // wait for cnt16 (replaceable by system event)
 
-			int s = __R31;
+				int s = __R31;
 
-			if( ~s & 1<<18 ) {
-				memcpy( payload+58, "broken?", 7 );
-				s>>=1;
+				char lookup16[] = { 0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4 };
+
+				char b1 = (lookup16[0xF & s>>12] + lookup16[0xF & s>>8] ) < 4; // majority voting and inversion
+				char b2 = (lookup16[0xF & s>>4 ] + lookup16[0xF & s>>0] ) < 4;
+
+				payload[cnt]   = '0' + b1;
+				payload[1+cnt] = '0' + b2;
+
+				byte <<= 2;
+
+				byte |= b1<<1 | b2;
+
+				payload[12] = reverse(byte >> 1); // reverse byte and drop uart start/stop bits
 			}
-
-			// 2MHz sampling of inversed 'x' byte: 1100000000011111111000000001100
-
-			payload[47] = '>';
-			payload[48] = 0xFF & ~reverse(s>>1); // true for 1MHz sampling and transmission
-
-			int a = s>>2;
-			a = ~reverse( (1 & a>>0)<<0 | (1 & a>>2)<<1 | (1 & a>>4)<<2 | (1 & a>>6)<<3 | (1 & a>>8)<<4 | (1 & a>>10)<<5 | (1 & a>>12)<<6 | (1 & a>>14)<<7 );
-
-			payload[50] = '>';
-			payload[51] = a; // true for 2MHz sampling, 1MHz transmission
-
-			//int b = s>>3;
-			//b = ~reverse( (1 & b>>0)<<0 | (1 & b>>2)<<1 | (1 & b>>4)<<2 | (1 & b>>6)<<3 | (1 & b>>8)<<4 | (1 & b>>10)<<5 | (1 & b>>12)<<6 | (1 & b>>14)<<7 );
-
-			//payload[51] = b; // true for 2MHz sampling, 1MHz transmission
 
 			CT_CFG.GPCFG1_bit.PRU1_GPI_SB = 1; // clear start bit
-			
-			while( s ) {
-				payload[cond--] = '0' + s % 2;
-				s /= 2;
-			}
 
-			// char help[] = "expected: 1 11100001 0 for x, 1 01100001 0 for y, 1 11111111 0 for \\0\n";
+			//cond = 31;
+
+			//while( s ) {
+			//	payload[cond--] = '0' + s % 2;
+			//	s /= 2;
+			//}
 
 			pru_rpmsg_send(&transport, dst, src, payload, 67);
 
