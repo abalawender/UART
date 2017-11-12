@@ -39,14 +39,17 @@
 #include <pru_rpmsg.h>
 #include "PRU1_resource_table.h"
 
+volatile register uint32_t __R30;
 volatile register uint32_t __R31;
 
-/* Host-0 Interrupt sets bit 30 in register R31 */
-#define HOST_INT			((uint32_t) 1 << 30)
+/* Host-1 Interrupt sets bit 31 in register R31 */
+#define HOST_INT			((uint32_t) 1 << 31)
 
 /* The PRU-ICSS system events used for RPMsg are defined in the Linux device tree
  * PRU0 uses system event 16 (To ARM) and 17 (From ARM)
  * PRU1 uses system event 18 (To ARM) and 19 (From ARM)
+ *
+ * page 223 of https://elinux.org/images/d/da/Am335xPruReferenceGuide.pdf
  */
 #define TO_ARM_HOST			18
 #define FROM_ARM_HOST			19
@@ -56,8 +59,8 @@ volatile register uint32_t __R31;
  * at linux-x.y.z/drivers/rpmsg/rpmsg_pru.c
  */
 #define CHAN_NAME			"rpmsg-pru"
-#define CHAN_DESC			"Channel 30"
-#define CHAN_PORT			30
+#define CHAN_DESC			"Channel 31"
+#define CHAN_PORT			31
 
 /*
  * Used to make sure the Linux drivers are ready for RPMsg communication
@@ -73,27 +76,13 @@ static unsigned char lookup[16] = {
 	0x1, 0x9, 0x5, 0xd, 0x3, 0xb, 0x7, 0xf, };
 
 uint8_t reverse(uint8_t n) {
-	// Reverse the top and bottom nibble then swap them.
-	return (lookup[n&0b1111] << 4) | lookup[n>>4];
+	return (lookup[n&0xF] << 4) | lookup[n>>4];
 }
 
-// Detailed breakdown of the math
-//  + lookup reverse of bottom nibble
-//  |       + grab bottom nibble
-//  |       |        + move bottom result into top nibble
-//  |       |        |     + combine the bottom and top results 
-//  |       |        |     | + lookup reverse of top nibble
-//  |       |        |     | |       + grab top nibble
-//  V       V        V     V V       V
-// (lookup[n&0b1111] << 4) | lookup[n>>4]
+#include "../common"
 
-/*
- * main.c
- */
 void main(void)
 {
-	CT_CFG.GPCFG1_bit.PRU1_GPI_MODE = 0x0; // direct in
-
 	struct pru_rpmsg_transport transport;
 	uint16_t src, dst, len;
 	volatile uint8_t *status;
@@ -110,6 +99,8 @@ void main(void)
 
 	/* Initialize the RPMsg transport structure */
 	pru_rpmsg_init(&transport, &resourceTable.rpmsg_vring0, &resourceTable.rpmsg_vring1, TO_ARM_HOST, FROM_ARM_HOST);
+
+	uart_init( RX );
 
 	/* Create the RPMsg channel between the PRU and ARM user space using the transport structure. */
 	while (pru_rpmsg_channel(RPMSG_NS_CREATE, &transport, CHAN_NAME, CHAN_DESC, CHAN_PORT) != PRU_RPMSG_SUCCESS);
@@ -129,56 +120,65 @@ void main(void)
 	// }
 
 
-	CT_CFG.GPCFG1_bit.PRU1_GPI_DIV0 = 0x17; // 200MHz / 12.5 -> 16MHz
-	//CT_CFG.GPCFG1_bit.PRU1_GPI_DIV1 = 0x1E; // -> 1MHz
-	//CT_CFG.GPCFG1_bit.PRU1_GPI_DIV1 = 0x0E; // -> 2MHz
-	//CT_CFG.GPCFG1_bit.PRU1_GPI_DIV1 = 0x06; // -> 4MHz
-	//CT_CFG.GPCFG1_bit.PRU1_GPI_DIV1 = 0x02; // -> 8MHz 
-	CT_CFG.GPCFG1_bit.PRU1_GPI_DIV1 = 0x00; // -> 16MHz 
-
-	CT_CFG.GPCFG1_bit.PRU1_GPI_MODE = 0x2; // 28-bit shift in
-
-
 	src = 1024; // found out to be working ok
 	dst = 30;
-	int cnt = 0;
+	len = 0;
+	int bit_counter = 0;
 	int byte = 0;
+	int pos = 0;
+
+	memcpy( payload, "                                                               \r\n", 67 );
+
+	/* Clear the status of the PRU-ICSS system event that the Shift Capture will use */
+	//#define SHIFT_CAPTURE_PRU1_EVT 2;
+	//CT_INTC.SICR_bit.STS_CLR_IDX = SHIFT_CAPTURE_PRU1_EVT;
+
 	while(1) {
-			memcpy( payload, "                                                                 \n", 67 );
 
-			byte = 0;
+		while( ~__R31 & 1<<28 ) { };  // wait for bit_counter16 (replaceable by system event)
 
-			for(cnt = 0; cnt < 10; cnt+=2) {
+		int s = __R31;
 
-				while( ~__R31 & 1<<28 ) { };  // wait for cnt16 (replaceable by system event)
+		char bitcount16[] = { 0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4 };
 
-				int s = __R31;
+		char b1 = (bitcount16[0xF & s>>12] + bitcount16[0xF & s>>8] ) < 4; // majority voting and inversion
+		char b2 = (bitcount16[0xF & s>>4 ] + bitcount16[0xF & s>>0] ) < 4;
 
-				char lookup16[] = { 0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4 };
+		// payload[bit_counter]   = '0' + b1;
+		// payload[1+bit_counter] = '0' + b2;
 
-				char b1 = (lookup16[0xF & s>>12] + lookup16[0xF & s>>8] ) < 4; // majority voting and inversion
-				char b2 = (lookup16[0xF & s>>4 ] + lookup16[0xF & s>>0] ) < 4;
+		byte <<= 2;
+		byte |= b1<<1 | b2;
 
-				payload[cnt]   = '0' + b1;
-				payload[1+cnt] = '0' + b2;
+		bit_counter += 2;
+		if ( bit_counter < 10 ) continue;
 
-				byte <<= 2;
+		//payload[12] = reverse(byte >> 1); // reverse byte and truncate uart start/stop bits
+		
+		payload[ pos ] = reverse(byte >> 1); // reverse byte and truncate uart start/stop bits
 
-				byte |= b1<<1 | b2;
+		len = bit_counter = byte = 0;
 
-				payload[12] = reverse(byte >> 1); // reverse byte and drop uart start/stop bits
-			}
+		CT_CFG.GPCFG1_bit.PRU1_GPI_SB = 1; // clear start bit
 
-			CT_CFG.GPCFG1_bit.PRU1_GPI_SB = 1; // clear start bit
+		//pru_rpmsg_send(&transport, dst, src, payload, 67);
+		//pru_rpmsg_send(&transport, dst, src, payload+12, 1);
 
-			//cond = 31;
-
-			//while( s ) {
-			//	payload[cond--] = '0' + s % 2;
-			//	s /= 2;
-			//}
-
-			pru_rpmsg_send(&transport, dst, src, payload, 67);
+		if( payload[pos] == '\04' || ++pos == 64 ) {
+			payload[pos]   = '\r';
+			payload[++pos] = '\n';
+			payload[++pos] = '\0';
+			pru_rpmsg_send(&transport, dst, src, payload, ++pos);
+			pos = 0;
+		}
 
 	}
 }
+
+//print bits
+//cond = 31;
+
+//while( s ) {
+//	payload[cond--] = '0' + s % 2;
+//	s /= 2;
+//}

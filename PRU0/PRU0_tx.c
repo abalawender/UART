@@ -32,143 +32,80 @@
  */
 
 #include <stdint.h>
-#include <pru_cfg.h>
-#include "PRU0_resource_table.h"
 #include <types.h>
+#include <pru_cfg.h>
+#include <pru_intc.h>
+#include <rsc_types.h>
+#include <pru_rpmsg.h>
+#include "PRU0_resource_table.h"
 
 volatile register uint32_t __R30;
 volatile register uint32_t __R31;
 
+/* Host-0 Interrupt sets bit 30 in register R31 */
+#define HOST_INT			((uint32_t) 1 << 30)
+
+/* The PRU-ICSS system events used for RPMsg are defined in the Linux device tree
+ * PRU0 uses system event 16 (To ARM) and 17 (From ARM)
+ * PRU1 uses system event 18 (To ARM) and 19 (From ARM)
+ *
+ * see page 223 of https://elinux.org/images/d/da/Am335xPruReferenceGuide.pdf
+ */
+#define TO_ARM_HOST			16
+#define FROM_ARM_HOST			17
+
+/*
+ * Using the name 'rpmsg-pru' will probe the rpmsg_pru driver found
+ * at linux-x.y.z/drivers/rpmsg/rpmsg_pru.c
+ */
+#define CHAN_NAME			"rpmsg-pru"
+#define CHAN_DESC			"Channel 30"
+#define CHAN_PORT			30
+
+/*
+ * Used to make sure the Linux drivers are ready for RPMsg communication
+ * Found at linux-x.y.z/include/uapi/linux/virtio_config.h
+ */
+#define VIRTIO_CONFIG_S_DRIVER_OK	4
+
+uint8_t payload[RPMSG_BUF_SIZE];
+
+#include "../common"
+
 void main(void)
 {
-	volatile uint32_t gpio;
+	struct pru_rpmsg_transport transport;
+	uint16_t src, dst, len;
+	volatile uint8_t *status;
 
-	/* Clear SYSCFG[STANDBY_INIT] to enable OCP master port */
+	/* Allow OCP master port access by the PRU so the PRU can read external memories */
 	CT_CFG.SYSCFG_bit.STANDBY_INIT = 0;
 
-	__delay_cycles(2000); // 1ms
+	/* Clear the status of the PRU-ICSS system event that the ARM will use to 'kick' us */
+	CT_INTC.SICR_bit.STS_CLR_IDX = FROM_ARM_HOST;
 
-	gpio = 1; /* pr1_pru0_pru_r30_0, in order to use it, configure P9_31 as pruout (mode 5) */
+	/* Make sure the Linux drivers are ready for RPMsg communication */
+	status = &resourceTable.rpmsg_vdev.status;
+	while (!(*status & VIRTIO_CONFIG_S_DRIVER_OK));
 
-	/*
-	 * 1st example: 
-	 * 	repeatedly transmit 'U' character
-	 *
-	 * char test[] = {1, 0, 1, 0, 1, 0, 1, 0, 1, 0};
-	 * int i = 0;
-	 * __R30 = gpio;
-	 * __delay_cycles(1000000);
-	 * while (1) {
-	 * 	__R30 = test[9-i%10];
-	 * 	__delay_cycles(1000);
-	 * 	i++;
-	 * 	if( i%10 == 0 ) 
-	 * 		__delay_cycles(4000);
-	 * }
-	*/
+	/* Initialize the RPMsg transport structure */
+	pru_rpmsg_init(&transport, &resourceTable.rpmsg_vring0, &resourceTable.rpmsg_vring1, TO_ARM_HOST, FROM_ARM_HOST);
 
-	CT_CFG.GPCFG0_bit.PRU0_GPO_MODE = 0x0; // direct out
-
-	__R30 = 0;
+	uart_init( TX );
 
 
-	// 0x00 - 1;
-	// 0x01 - 1.5;
-	// 0x02 - 2;
-	// 0x03 - 2.5;
-	// 0x04 - 3;
-	// 0x05 - 3.5;
-	// 0x06 - 4;
-	// 0x07 - 4.5;
-	// 0x08 - 5;
-	// 0x09 - 5.5;
-	// 0x0a - 6;
-	// 0x0b - 6.5;
-	// 0x0c - 7;
-	// 0x0d - 7.5;
-	// 0x0e - 8;
-	// 0x0f - 8.5;
-	// 0x10 - 9;
-	// 0x11 - 9.5;
-	// 0x12 - 10;
-	// 0x13 - 10.5;
-	// 0x14 - 11;
-	// 0x15 - 11.5;
-	// 0x16 - 12;
-	// 0x17 - 12.5;
-	// 0x18 - 13;
-	// 0x19 - 13.5;
-	// 0x1a - 14;
-	// 0x1b - 14.5;
-	// 0x1c - 15;
-	// 0x1d - 15.5;
-	// 0x1e - 16;
-
-	// x = div*2-2;
-
-	// CT_CFG.GPCFG0_bit.PRU0_GPO_DIV0 = 0x1e; // 200 / 16 = 12.5
-	// CT_CFG.GPCFG0_bit.PRU0_GPO_DIV1 = 0x1e; // 12.5 / 16 = 0.78125
-
-	__delay_cycles(400000000); // 2s?
-
-	__R30 = 1<<5;
-
-	CT_CFG.GPCFG0_bit.PRU0_GPO_MODE = 0x1; // shift out
-
-	CT_CFG.GPCFG0_bit.PRU0_GPO_DIV0 = 0x17; // 200 / 12.5 = 16
-	CT_CFG.GPCFG0_bit.PRU0_GPO_DIV1 = 0x0e; // 16 / 8 = 2
-	//CT_CFG.GPCFG0_bit.PRU0_GPO_DIV1 = 0x1e; // 16 / 16 = 1
-
-	unsigned char msg[] = "xy";
-	//unsigned char msg[] = "lubie Martyne\r\n";
-	int i = 0;
-
-	__R30 |= 1<<29; 	/* set LOAD_GPO_SH0 */
-	__R30 &= 0xFFFF0000;
-	__R30 &= ~(1<<29); 	/* reset LOAD_GPO_SH0 */
-
-	__R30 |= 1<<31;		/* set ENABLE_SHIFT */
-
-	while(1) {
-
-		while( CT_CFG.GPCFG0_bit.PRU0_GPO_SH_SEL == 1 ) {}; // wait until it's zero
-
-		__R30 |= 1<<30; 				/* set LOAD_GPO_SH1 */
-		__R30 &= ~0xFFFF; 				/* reset R30[0:15] */
-		__R30 |= ( 0x01FF & ~(msg[(i+0)%sizeof(msg)]<<1) ) | ( 0xFC00 & ~(msg[(i+1)%sizeof(msg)]<<11 ) );
-		__R30 &= ~(1<<30); 				/* reset LOAD_GPO_SH1 */
-
-		while( CT_CFG.GPCFG0_bit.PRU0_GPO_SH_SEL == 0 ) {}; // wait until it's one
-
-		__R30 |= 1<<29; 	/* set LOAD_GPO_SH0 */
-		__R30 &= 0xFFFF0000;
-		__R30 |= ( 0x0007 & ~(msg[(i+1)%sizeof(msg)]>>5) ) | ( 0x1FF0 & ~(msg[(i+2)%sizeof(msg)]<<5 ) );
-		__R30 &= ~(1<<29); 	/* reset LOAD_GPO_SH0 */
-
-		i+=3;
-
-
-		while( CT_CFG.GPCFG0_bit.PRU0_GPO_SH_SEL == 1 ) {}; // wait until it's zero
-
-		__R30 = 0;
-
-		while( CT_CFG.GPCFG0_bit.PRU0_GPO_SH_SEL == 0 ) {}; // wait until it's zero
-		
-		CT_CFG.GPCFG0_bit.PRU0_GPO_MODE = 0x0; // direct out
-
-
-		__delay_cycles(200000000);
-
-		CT_CFG.GPCFG0_bit.PRU0_GPO_MODE = 0x1; // shift out
-
-		__R30 |= 1<<29 | 1<<30 ; 	/* set LOAD_GPO_SH0/1 */
-		__R30 &= 0xFFFF0000;
-		__R30 &= ~(1<<29 | 1<<30); 	/* reset LOAD_GPO_SH0/1 */
-
-		__R30 |= 1<<31;
-
+	/* Create the RPMsg channel between the PRU and ARM user space using the transport structure. */
+	while (pru_rpmsg_channel(RPMSG_NS_CREATE, &transport, CHAN_NAME, CHAN_DESC, CHAN_PORT) != PRU_RPMSG_SUCCESS);
+	while (1) {
+		/* Check bit 30 of register R31 to see if the ARM has kicked us */
+		if (__R31 & HOST_INT) {
+			/* Clear the event status */
+			CT_INTC.SICR_bit.STS_CLR_IDX = FROM_ARM_HOST;
+			/* Receive all available messages, multiple messages can be sent per kick */
+			while (pru_rpmsg_receive(&transport, &src, &dst, payload, &len) == PRU_RPMSG_SUCCESS) {
+				uart_tx( payload, len );
+			}
+		}
 	}
-
-	__R30 &= ~(1<<31);	/* reset ENABLE_SHIFT */
 }
 
