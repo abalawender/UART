@@ -40,6 +40,8 @@
 #include "PRU1_resource_table.h"
 #include "../common.h"
 
+#include <pru_ctrl.h>
+
 volatile register uint32_t __R30;
 volatile register uint32_t __R31;
 
@@ -132,39 +134,72 @@ void main(void)
 
 	memcpy( payload, "                                                               \r\n", 67 );
 
-	/* Clear the status of the PRU-ICSS system event that the Shift Capture will use */
-	//#define SHIFT_CAPTURE_PRU1_EVT 2;
-	//CT_INTC.SICR_bit.STS_CLR_IDX = SHIFT_CAPTURE_PRU1_EVT;
+#ifdef MEASURE
+			PRU1_CTRL.CTRL_bit.CTR_EN = 0;
+			PRU1_CTRL.CYCLE = 0;
+			PRU1_CTRL.CTRL_bit.CTR_EN = 1;
+			volatile int x=0;
+#endif
 
 	while(1) {
 
+		//while( __R31 & HOST_INT ) { };  // wait for a kick
 		while( ~__R31 & 1<<28 ) { };  // wait for bit_counter16 (replaceable by system event)
+#ifdef MEASURE
+		x = PRU1_CTRL.CYCLE;
+#endif
 
 		int s = __R31;
 
-		char b1 = (bitcount16[0xF & s>>12] + bitcount16[0xF & s>>8] ) < 4; // majority voting and inversion
-		char b2 = (bitcount16[0xF & s>>4 ] + bitcount16[0xF & s>>0] ) < 4;
+		//char b1 = (bitcount16[0xF & s>>12] + bitcount16[0xF & s>>8] ) <4; // majority voting and inversion
+		//char b2 = (bitcount16[0xF & s>>4 ] + bitcount16[0xF & s>>0] ) <4;
 
-		byte <<= 2;
-		byte |= b1<<1 | b2;
+		char b1 = ( 0xF & (s>>12 | s>>8) ) != 0xF; // majority voting and inversion (optimized)
+		char b2 = ( 0xF & (s>>4  | s>>0) ) != 0xF;
+
+		// byte <<= 2;
+		// byte |= b1<<1 | b2;
+
+		byte |= (b2<<1 | b1 ) << bit_counter; // reverse bit order
 
 		bit_counter += 2;
 		if ( bit_counter < 10 ) continue;
 
-		payload[ pos ] = reverse(byte >> 1); // reverse byte and truncate uart start/stop bits
+		//payload[ pos ] = reverse(byte >> 1); // reverse byte and truncate uart start/stop bits
+
+		payload[ pos ] = byte >> 1; // truncate uart start/stop bits
 
 		len = bit_counter = byte = 0;
 		(void)len;
 
-		CT_CFG.GPCFG1_bit.PRU1_GPI_SB = 1; // clear start bit
+#ifdef MEASURE
+		s = PRU1_CTRL.CYCLE - x;
+#endif
 
-		if( payload[pos] == '\04' || ++pos == 64 ) /* send buffer when filled or EOF received */
+		if( 0 == ( __R31 & 0xF) ) 
+			CT_CFG.GPCFG1_bit.PRU1_GPI_SB = 1; // clear start bit // BUT ONLY IF NO TRANSMISSION IS GOING ON RIGHT NOW!
+		// might also be solved by using 2 stop bits!
+		//
+
+#ifdef MEASURE
+		int cond = 31;
+
+		while( s ) {
+			payload[cond--] = '0' + (s%10);
+			s /= 10;
+		}
+		pru_rpmsg_send(&transport, dst, src, payload, 67);
+		memcpy( payload, "                                                               \r\n", 67 );
+		pos = 0;
+#else
+		if( payload[pos] == '\n' || ++pos == 64 )
 		{	
 			payload[pos]   = '\r';
 			payload[++pos] = '\n';
 			pru_rpmsg_send(&transport, dst, src, payload, ++pos);
 			pos = 0;
 		}
+#endif
 
 	}
 }
